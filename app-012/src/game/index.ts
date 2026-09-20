@@ -67,6 +67,10 @@ export class ApothecaryGame {
       this.ui.drawPrescription(ctx, this.game.prescription, this.game.weighed, this.game.currentHerb);
     }
 
+    if (this.game.currentSlip) {
+      this.ui.drawSlip(ctx, this.game.currentSlip, Date.now());
+    }
+
     this.ui.drawStatus(ctx, this.game.state.level, this.game.state.score, this.game.state.combo, this.game.state.queue, this.game.state.satisfaction, this.game.getTimeLeft());
     this.ui.drawPackageArea(ctx, w, h, this.game.packages);
     this.ui.drawInstructions(ctx, w, h);

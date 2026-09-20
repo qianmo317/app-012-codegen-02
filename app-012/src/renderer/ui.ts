@@ -1,4 +1,14 @@
 import type { Prescription, WeighResult } from '../types';
+import {
+  SLIP_STEP_LABELS,
+  formatClock,
+  formatDuration,
+  getCurrentStep,
+  getReturnCount,
+  getStuckDuration,
+  isSlipDispensed,
+} from '../tracking';
+import type { TrackingSlip } from '../tracking';
 
 export class UIRenderer {
   prescriptionX: number = 20;
@@ -56,6 +66,106 @@ export class UIRenderer {
         ctx.stroke();
       }
     });
+  }
+
+  drawSlip(ctx: CanvasRenderingContext2D, slip: TrackingSlip, now: number): void {
+    const x = this.prescriptionX;
+    const w = this.prescriptionW;
+    // 紧跟处方面板下方（处方面板高 = 味数 * 32 + 50）
+    const y = this.prescriptionY + slip.herbCount * 32 + 50 + 12;
+
+    const dispensed = isSlipDispensed(slip);
+    const current = getCurrentStep(slip);
+    const returnCount = getReturnCount(slip);
+    const lastReturn = slip.returns[slip.returns.length - 1] ?? null;
+    const lastNote = slip.annotations[slip.annotations.length - 1] ?? null;
+
+    let h = 14 + 20 + 16 * 3 + 30 + 16; // 边距 + 标题 + 3行信息 + 步骤条 + 退回次数
+    if (current) h += 16;
+    if (lastReturn) h += 14;
+    if (dispensed) h += 16;
+    if (lastNote) h += 14;
+    h += 8;
+
+    ctx.fillStyle = 'rgba(255, 252, 245, 0.92)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = dispensed ? '#228b22' : '#8b6914';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+
+    let ty = y + 18;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = '#8b4513';
+    ctx.font = 'bold 13px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`流转单 ${slip.id}`, x + 10, ty);
+    ty += 16;
+
+    ctx.fillStyle = '#333';
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`处方 ${slip.prescriptionId}`, x + 10, ty);
+    ty += 16;
+    ctx.fillText(`病人 ${slip.patientName} · ${slip.herbCount}味药`, x + 10, ty);
+    ty += 16;
+    ctx.fillText(`接单 ${slip.receivedBy} ${formatClock(slip.receivedAt)}`, x + 10, ty);
+    ty += 22;
+
+    // 四步进度条：抓药 → 复核 → 包好 → 发出
+    const chipGap = 6;
+    const chipW = (w - 20 - chipGap * 3) / 4;
+    slip.steps.forEach((step, i) => {
+      const cx = x + 10 + i * (chipW + chipGap);
+      const cy = ty - 12;
+      const color = step.status === 'done' ? '#228b22' : step.status === 'active' ? '#d47f00' : '#999';
+      const mark = step.status === 'done' ? '✓' : step.status === 'active' ? '●' : '○';
+      ctx.fillStyle = step.status === 'active' ? 'rgba(212, 165, 116, 0.35)' : 'rgba(0, 0, 0, 0.04)';
+      ctx.fillRect(cx, cy, chipW, 20);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx, cy, chipW, 20);
+      ctx.fillStyle = color;
+      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${SLIP_STEP_LABELS[step.key]}${mark}`, cx + chipW / 2, cy + 14);
+      ctx.textAlign = 'left';
+    });
+    ty += 12;
+
+    if (current) {
+      const stuckMs = getStuckDuration(slip, now);
+      const overdue = stuckMs > 60_000;
+      ctx.fillStyle = overdue ? '#dc143c' : '#b06a00';
+      ctx.font = 'bold 12px "Microsoft YaHei", sans-serif';
+      ctx.fillText(`▸ 卡在【${SLIP_STEP_LABELS[current.key]}】已停 ${formatDuration(stuckMs)}`, x + 10, ty);
+      ty += 16;
+    }
+
+    ctx.fillStyle = returnCount > 0 ? '#dc143c' : '#999';
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`退回 ${returnCount} 次`, x + 10, ty);
+    ty += 16;
+
+    if (lastReturn) {
+      ctx.fillStyle = '#a04040';
+      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.fillText(`末次 ${formatClock(lastReturn.returnedAt)} ${truncate(lastReturn.reason, 16)}`, x + 10, ty);
+      ty += 14;
+    }
+
+    if (dispensed && slip.dispensedAt !== null) {
+      ctx.fillStyle = '#228b22';
+      ctx.font = 'bold 12px "Microsoft YaHei", sans-serif';
+      ctx.fillText(`已发出 ${formatClock(slip.dispensedAt)} · 归档只可加注`, x + 10, ty);
+      ty += 16;
+    }
+
+    if (lastNote) {
+      ctx.fillStyle = '#666';
+      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.fillText(`附 ${formatClock(lastNote.addedAt)} ${truncate(lastNote.note, 16)}`, x + 10, ty);
+      ty += 14;
+    }
   }
 
   drawStatus(ctx: CanvasRenderingContext2D, level: number, score: number, combo: number, queue: number, satisfaction: number, timeLeft: number | null): void {
@@ -330,4 +440,8 @@ export class UIRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText('归零', x + 30, y + 16);
   }
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }

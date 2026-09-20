@@ -1,4 +1,7 @@
 const STORAGE_KEY = 'apothecary-weighing-v1';
+const SLIP_STORAGE_KEY = 'apothecary-slips-v1';
+
+import type { TrackingSlip } from './tracking';
 
 export interface SaveData {
   highestScore: number;
@@ -36,5 +39,26 @@ export function clearSave(): void {
     localStorage.removeItem(STORAGE_KEY);
   } catch {
     // ignore
+  }
+}
+
+export function loadSlips(): TrackingSlip[] {
+  try {
+    const raw = localStorage.getItem(SLIP_STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (Array.isArray(data)) return data as TrackingSlip[];
+    }
+  } catch {
+    // ignore parse error
+  }
+  return [];
+}
+
+export function saveSlips(slips: TrackingSlip[]): void {
+  try {
+    localStorage.setItem(SLIP_STORAGE_KEY, JSON.stringify(slips));
+  } catch {
+    // ignore storage error
   }
 }

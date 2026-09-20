@@ -5,6 +5,16 @@ import { judgeWeight, getWeightStatus } from '../weighing';
 import { scoreRound } from '../scoring';
 import { getRandomHerbs } from '../herbs';
 import type { HerbMeta } from '../types';
+import {
+  SlipRegistry,
+  advanceSlip,
+  annotateSlip,
+  generatePatientName,
+  generateSlipId,
+  getCurrentStep,
+  recordReturn,
+} from '../tracking';
+import type { TrackingSlip } from '../tracking';
 
 export class GameManager {
   state: GameState = {
@@ -36,6 +46,9 @@ export class GameManager {
   timeUsed = 0;
   lastTick = 0;
 
+  slipRegistry = new SlipRegistry();
+  currentSlip: TrackingSlip | null = null;
+
   drawerOpen = new Set<string>();
   draggingHerb: string | null = null;
   dragX = 0;
@@ -66,6 +79,14 @@ export class GameManager {
     this.lastTick = performance.now();
     this.drawerOpen = new Set();
     this.draggingHerb = null;
+    this.currentSlip = this.slipRegistry.createSlip({
+      id: generateSlipId(),
+      prescriptionId: this.prescription.id,
+      patientName: generatePatientName(),
+      herbCount: this.prescription.items.length,
+      receivedBy: '王药师',
+      receivedAt: Date.now(),
+    });
     this.phase = 'playing';
   }
 
@@ -129,6 +150,13 @@ export class GameManager {
 
     if (status === 'fail') {
       this.state.combo = 0;
+      if (this.currentSlip) {
+        recordReturn(
+          this.currentSlip,
+          `${this.currentHerb} 称量超差（目标${this.targetGrams}g，实际${result.actual.toFixed(1)}g），退回重抓`,
+          Date.now()
+        );
+      }
     } else {
       this.state.combo++;
       this.state.score += breakdown.total;
@@ -158,6 +186,9 @@ export class GameManager {
     this.reviewQuestion = generateReviewQuestion(this.prescription);
     this.reviewSelected = null;
     this.reviewResult = null;
+    if (this.currentSlip) {
+      advanceSlip(this.currentSlip, Date.now());
+    }
     this.phase = 'review';
   }
 
@@ -169,8 +200,14 @@ export class GameManager {
     if (!correct) {
       this.state.satisfaction -= 10;
       this.state.combo = 0;
+      if (this.currentSlip) {
+        annotateSlip(this.currentSlip, `复核问答错误（${this.reviewQuestion.herb}），扣满意度`, Date.now());
+      }
     } else {
       this.state.satisfaction = Math.min(100, this.state.satisfaction + 5);
+      if (this.currentSlip) {
+        advanceSlip(this.currentSlip, Date.now());
+      }
     }
     setTimeout(() => this.finishLevel(), 1500);
     return correct;
@@ -180,9 +217,18 @@ export class GameManager {
     const passed = this.results.every(r => r.ok) && this.state.satisfaction > 0;
     if (passed) {
       this.state.queue = Math.min(10, this.state.queue + 1);
+      if (this.currentSlip) {
+        // 包好、发出依次走完，药交到病人手里即结单
+        while (getCurrentStep(this.currentSlip)) {
+          advanceSlip(this.currentSlip, Date.now());
+        }
+      }
     } else {
       this.state.queue--;
       this.state.satisfaction = Math.max(0, this.state.satisfaction - 20);
+      if (this.currentSlip) {
+        annotateSlip(this.currentSlip, '本关未通过，病人未取药', Date.now());
+      }
     }
 
     if (this.state.queue <= 0 || this.state.satisfaction <= 0) {
@@ -201,6 +247,9 @@ export class GameManager {
   }
 
   handleTimeout(): void {
+    if (this.currentSlip) {
+      annotateSlip(this.currentSlip, '超时未完成，病人离开', Date.now());
+    }
     this.state.queue--;
     this.state.satisfaction -= 15;
     this.state.combo = 0;
