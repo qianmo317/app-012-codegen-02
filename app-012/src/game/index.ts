@@ -108,6 +108,11 @@ export class ApothecaryGame {
     } else if (this.game.phase === 'gameover') {
       this.ui.drawGameOver(ctx, w, h, this.game.state.score, this.game.state.level);
     }
+
+    // 流转单跟着处方走，任何阶段都看得见
+    if (this.game.slip) {
+      this.ui.drawSlip(ctx, this.game.slip, Date.now());
+    }
   }
 
   renderMenu(ctx: CanvasRenderingContext2D, w: number, h: number): void {

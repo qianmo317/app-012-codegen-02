@@ -1,4 +1,24 @@
 import type { Prescription, WeighResult } from '../types';
+import {
+  SLIP_STEPS,
+  SLIP_STEP_LABELS,
+  currentStepOf,
+  stuckMsOf,
+  returnCountOf,
+  dispatchedAtOf,
+  formatClock,
+  formatDuration,
+} from '../slip';
+import type { Slip } from '../slip';
+
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) {
+    t = t.slice(0, -1);
+  }
+  return `${t}…`;
+}
 
 export class UIRenderer {
   prescriptionX: number = 20;
@@ -55,6 +75,103 @@ export class UIRenderer {
         ctx.lineWidth = 1;
         ctx.stroke();
       }
+    });
+  }
+
+  drawSlip(ctx: CanvasRenderingContext2D, slip: Slip, now: number): void {
+    const lineH = 32;
+    const x = this.prescriptionX;
+    const w = this.prescriptionW;
+    // 跟在处方笺下面
+    const y = this.prescriptionY + slip.herbCount * lineH + 50 + 8;
+
+    const current = currentStepOf(slip);
+    const returns = returnCountOf(slip);
+    const lastReturn = slip.returns[slip.returns.length - 1];
+    const dispatchedAt = dispatchedAtOf(slip);
+    const stuckMs = stuckMsOf(slip, now);
+
+    const infoLines = [
+      `处方 ${slip.prescriptionId}`,
+      `病人 ${slip.patientName} · ${slip.herbCount}味药`,
+      `接单 ${slip.receivedBy} · ${formatClock(slip.receivedAt)}`,
+    ];
+    const statusLines: Array<{ text: string; color: string }> = [];
+    if (current) {
+      statusLines.push({
+        text: `卡在「${SLIP_STEP_LABELS[current.step]}」 已停 ${formatDuration(stuckMs)}`,
+        color: stuckMs > 60000 ? '#dc143c' : '#b3651a',
+      });
+    }
+    if (dispatchedAt !== null) {
+      statusLines.push({ text: `已发出 ${formatClock(dispatchedAt)} · 归档只可加说明`, color: '#228b22' });
+    }
+    statusLines.push({ text: `退回 ${returns} 回`, color: returns > 0 ? '#b22222' : '#777' });
+    if (lastReturn) {
+      statusLines.push({ text: `↳ ${formatClock(lastReturn.returnedAt)} ${lastReturn.reason}`, color: '#b22222' });
+    }
+    if (slip.annotations.length > 0) {
+      statusLines.push({ text: `说明 ${slip.annotations.length} 条`, color: '#555' });
+    }
+
+    const h = 26 + infoLines.length * 16 + 8 + 24 + 6 + statusLines.length * 16 + 8;
+
+    ctx.fillStyle = 'rgba(255, 252, 245, 0.95)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = slip.status === 'dispatched' ? '#228b22' : '#8b6914';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+
+    ctx.fillStyle = '#8b4513';
+    ctx.font = 'bold 13px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(fitText(ctx, `流转单 ${slip.slipNo}`, w - 70), x + 8, y + 18);
+
+    ctx.font = 'bold 11px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = slip.status === 'dispatched' ? '#228b22' : '#b3651a';
+    ctx.fillText(slip.status === 'dispatched' ? '已发出' : '在途', x + w - 8, y + 18);
+
+    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    infoLines.forEach((line, i) => {
+      ctx.fillStyle = '#333';
+      ctx.fillText(fitText(ctx, line, w - 16), x + 8, y + 36 + i * 16);
+    });
+
+    // 四步进度条：走完的打勾，正卡着的高亮
+    const chipY = y + 26 + infoLines.length * 16 + 8;
+    const chipW = (w - 16 - 3 * 6) / 4;
+    const currentIdx = current ? SLIP_STEPS.indexOf(current.step) : -1;
+    SLIP_STEPS.forEach((step, i) => {
+      const cx = x + 8 + i * (chipW + 6);
+      const done = slip.status === 'dispatched' || i < currentIdx;
+      const isCurrent = i === currentIdx;
+
+      if (isCurrent) {
+        ctx.globalAlpha = 0.75 + 0.25 * Math.sin(now / 300);
+      }
+      ctx.fillStyle = done ? '#a8d8a8' : isCurrent ? '#d4a574' : '#e4ddd2';
+      ctx.fillRect(cx, chipY, chipW, 24);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = isCurrent ? '#8b4513' : '#a89a80';
+      ctx.lineWidth = isCurrent ? 2 : 1;
+      ctx.strokeRect(cx, chipY, chipW, 24);
+
+      ctx.fillStyle = done ? '#1a5c1a' : isCurrent ? '#5a3a10' : '#999';
+      ctx.font = `${isCurrent ? 'bold ' : ''}11px "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${done ? '✓ ' : ''}${SLIP_STEP_LABELS[step]}`, cx + chipW / 2, chipY + 12);
+    });
+    ctx.textBaseline = 'alphabetic';
+
+    statusLines.forEach((line, i) => {
+      ctx.fillStyle = line.color;
+      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(fitText(ctx, line.text, w - 16), x + 8, chipY + 24 + 14 + i * 16);
     });
   }
 

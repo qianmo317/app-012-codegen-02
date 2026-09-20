@@ -5,6 +5,9 @@ import { judgeWeight, getWeightStatus } from '../weighing';
 import { scoreRound } from '../scoring';
 import { getRandomHerbs } from '../herbs';
 import type { HerbMeta } from '../types';
+import { SlipBook, generatePatientName } from '../slip';
+import type { Slip } from '../slip';
+import { loadSlipBook, saveSlipBook } from '../storage';
 
 export class GameManager {
   state: GameState = {
@@ -31,6 +34,14 @@ export class GameManager {
   reviewSelected: number | null = null;
   reviewResult: boolean | null = null;
   levelConfig: LevelConfig = getLevelConfig(1);
+
+  book: SlipBook;
+  slip: Slip | null = null;
+  clerkName = '小药童';
+
+  constructor() {
+    this.book = loadSlipBook();
+  }
 
   timeLeft: number | null = null;
   timeUsed = 0;
@@ -66,6 +77,14 @@ export class GameManager {
     this.lastTick = performance.now();
     this.drawerOpen = new Set();
     this.draggingHerb = null;
+    // 处方一到手就开流转单，单子跟着处方走
+    this.slip = this.book.createSlip({
+      prescriptionId: this.prescription.id,
+      patientName: generatePatientName(),
+      herbCount: this.prescription.items.length,
+      receivedBy: this.clerkName,
+    });
+    this.persistBook();
     this.phase = 'playing';
   }
 
@@ -129,6 +148,14 @@ export class GameManager {
 
     if (status === 'fail') {
       this.state.combo = 0;
+      // 称出来的药不对，退回重抓，单子上记一笔
+      if (this.slip) {
+        this.book.recordReturn(
+          this.slip.slipNo,
+          `称量超差：${result.herb} 目标${result.target}g 实际${result.actual.toFixed(1)}g，退回重抓`
+        );
+        this.persistBook();
+      }
     } else {
       this.state.combo++;
       this.state.score += breakdown.total;
@@ -158,6 +185,11 @@ export class GameManager {
     this.reviewQuestion = generateReviewQuestion(this.prescription);
     this.reviewSelected = null;
     this.reviewResult = null;
+    // 抓药完成，单子走到「复核」
+    if (this.slip) {
+      this.book.advance(this.slip.slipNo);
+      this.persistBook();
+    }
     this.phase = 'review';
   }
 
@@ -169,8 +201,18 @@ export class GameManager {
     if (!correct) {
       this.state.satisfaction -= 10;
       this.state.combo = 0;
+      // 复核发现方子有问题，退回重抓，单子上记一笔
+      if (this.slip) {
+        this.book.recordReturn(this.slip.slipNo, `复核未通过：${this.reviewQuestion.herb} 克数答错，方子退回重抓`);
+        this.persistBook();
+      }
     } else {
       this.state.satisfaction = Math.min(100, this.state.satisfaction + 5);
+      // 复核通过，单子走到「包好」
+      if (this.slip) {
+        this.book.advance(this.slip.slipNo);
+        this.persistBook();
+      }
     }
     setTimeout(() => this.finishLevel(), 1500);
     return correct;
@@ -179,8 +221,21 @@ export class GameManager {
   finishLevel(): void {
     const passed = this.results.every(r => r.ok) && this.state.satisfaction > 0;
     if (passed) {
+      // 药包好了交出去，单子走完「包好」「发出」后归档
+      if (this.slip) {
+        while (this.slip.status === 'active') {
+          this.book.advance(this.slip.slipNo);
+        }
+        this.persistBook();
+      }
       this.state.queue = Math.min(10, this.state.queue + 1);
     } else {
+      // 病人没拿到药走了，单子还在途中，允许作废
+      if (this.slip) {
+        this.book.removeSlip(this.slip.slipNo);
+        this.slip = null;
+        this.persistBook();
+      }
       this.state.queue--;
       this.state.satisfaction = Math.max(0, this.state.satisfaction - 20);
     }
@@ -201,6 +256,12 @@ export class GameManager {
   }
 
   handleTimeout(): void {
+    // 超时病人离开，药没交出去，在途单子作废
+    if (this.slip && this.slip.status === 'active') {
+      this.book.removeSlip(this.slip.slipNo);
+      this.persistBook();
+    }
+    this.slip = null;
     this.state.queue--;
     this.state.satisfaction -= 15;
     this.state.combo = 0;
@@ -217,5 +278,9 @@ export class GameManager {
 
   isDrawerOpen(herb: string): boolean {
     return this.drawerOpen.has(herb);
+  }
+
+  private persistBook(): void {
+    saveSlipBook(this.book);
   }
 }
